@@ -2,10 +2,9 @@ name: Bootstrap RAWJudge migration
 
 on:
   push:
+    branches: [main, migration/bootstrap]
+  pull_request:
     branches: [main]
-    paths:
-      - '.bootstrap/**'
-      - '.github/workflows/bootstrap-migration.yml'
   workflow_dispatch:
 
 permissions:
