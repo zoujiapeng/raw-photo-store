@@ -1,0 +1,42 @@
+name: Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test backend
+        run: |
+          pip install -e './backend[dev]'
+          cd backend && pytest
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK 36
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+      - name: Build APK
+        run: gradle -p android :app:testDebugUnitTest :app:assembleDebug --stacktrace
+      - name: Rename APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk RAWJudge-${GITHUB_REF_NAME}.apk
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: RAWJudge-${{ github.ref_name }}.apk
+          generate_release_notes: true
