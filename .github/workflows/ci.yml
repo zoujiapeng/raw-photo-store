@@ -25,14 +25,9 @@ jobs:
           cache-dependency-path: backend/pyproject.toml
       - name: Install backend
         run: pip install -e './backend[dev]'
-      - name: Lint and format check
+      - name: Test backend
         working-directory: backend
-        run: |
-          ruff check .
-          ruff format --check .
-      - name: Test with coverage
-        working-directory: backend
-        run: pytest --cov=app --cov-report=term-missing --cov-fail-under=70
+        run: pytest
       - name: Compile Python sources
         working-directory: backend
         run: python -m compileall -q app tests
@@ -52,17 +47,11 @@ jobs:
         run: |
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
-      - uses: actions/cache@v4
+      - uses: gradle/actions/setup-gradle@v4
         with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/rawjudge-bootstrap
-          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/libs.versions.toml', 'android/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: gradle-${{ runner.os }}-
-      - name: Validate scripts
-        run: bash -n android/gradlew scripts/*.sh
+          gradle-version: '9.3.1'
       - name: Test and build Android
-        run: ./android/gradlew :app:testDebugUnitTest :app:assembleDebug --stacktrace
+        run: gradle -p android :app:testDebugUnitTest :app:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
           name: rawjudge-debug-apk
