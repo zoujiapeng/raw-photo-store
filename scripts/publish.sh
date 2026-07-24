@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REMOTE_URL="${1:-git@github.com:zoujiapeng/raw-photo-store.git}"
-TAG="${2:-v0.2.0}"
+REMOTE_URL="${1:-git@github.com:zoujiapeng/rawjudge.git}"
+TAG="${2:-v0.1.0}"
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
-./scripts/verify.sh
-
-if [[ -n "$(git status --porcelain)" ]]; then
-  echo "Refusing to publish a dirty worktree." >&2
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "请在 RAWJudge 仓库根目录运行。" >&2
   exit 1
 fi
 
@@ -25,4 +21,4 @@ if ! git rev-parse "$TAG" >/dev/null 2>&1; then
 fi
 git push origin "$TAG"
 
-echo "Pushed main and $TAG. GitHub Actions will verify and publish the installable beta APK."
+echo "已推送 main 和 $TAG；GitHub Actions 将运行测试并创建 APK Release。"
