@@ -51,18 +51,33 @@ jobs:
         with:
           gradle-version: '9.3.1'
       - name: Test and build Android
+        id: android_build
+        continue-on-error: true
         shell: bash
         run: |
           set +e
           gradle -p android :app:testDebugUnitTest :app:assembleDebug --stacktrace > /tmp/rawjudge-gradle.log 2>&1
           status=$?
-          if [ "$status" -ne 0 ]; then
-            echo '--- Gradle failure tail ---'
-            tail -n 260 /tmp/rawjudge-gradle.log
-            exit "$status"
-          fi
-          tail -n 80 /tmp/rawjudge-gradle.log
-      - uses: actions/upload-artifact@v4
+          echo "$status" > /tmp/rawjudge-gradle-status
+          tail -n 320 /tmp/rawjudge-gradle.log > /tmp/rawjudge-gradle-tail.log
+          exit "$status"
+      - name: Upload Android diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rawjudge-android-diagnostics
+          path: |
+            /tmp/rawjudge-gradle-tail.log
+            /tmp/rawjudge-gradle-status
+          if-no-files-found: error
+          retention-days: 7
+      - name: Fail when Android build failed
+        if: steps.android_build.outcome == 'failure'
+        run: |
+          cat /tmp/rawjudge-gradle-tail.log
+          exit 1
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
         with:
           name: rawjudge-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
