@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -21,9 +25,19 @@ jobs:
           cache-dependency-path: backend/pyproject.toml
       - name: Install backend
         run: pip install -e './backend[dev]'
-      - name: Test backend
+      - name: Lint and format check
         working-directory: backend
-        run: pytest
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Test with coverage
+        working-directory: backend
+        run: pytest --cov=app --cov-report=term-missing --cov-fail-under=70
+      - name: Compile Python sources
+        working-directory: backend
+        run: python -m compileall -q app tests
+      - name: Build API container
+        run: docker build --tag rawjudge-api:ci backend
 
   android:
     runs-on: ubuntu-latest
@@ -38,13 +52,20 @@ jobs:
         run: |
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/cache@v4
         with:
-          gradle-version: '9.3.1'
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/rawjudge-bootstrap
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/libs.versions.toml', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+      - name: Validate scripts
+        run: bash -n android/gradlew scripts/*.sh
       - name: Test and build Android
-        run: gradle -p android :app:testDebugUnitTest :app:assembleDebug --stacktrace
+        run: ./android/gradlew :app:testDebugUnitTest :app:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
           name: rawjudge-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 14

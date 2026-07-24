@@ -27,3 +27,9 @@ Thumbs.db
 
 # Local verification
 .tmp-kotlin/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+data/
+uploads/
