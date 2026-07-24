@@ -51,7 +51,17 @@ jobs:
         with:
           gradle-version: '9.3.1'
       - name: Test and build Android
-        run: gradle -p android :app:testDebugUnitTest :app:assembleDebug --stacktrace
+        shell: bash
+        run: |
+          set +e
+          gradle -p android :app:testDebugUnitTest :app:assembleDebug --stacktrace > /tmp/rawjudge-gradle.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo '--- Gradle failure tail ---'
+            tail -n 260 /tmp/rawjudge-gradle.log
+            exit "$status"
+          fi
+          tail -n 80 /tmp/rawjudge-gradle.log
       - uses: actions/upload-artifact@v4
         with:
           name: rawjudge-debug-apk
