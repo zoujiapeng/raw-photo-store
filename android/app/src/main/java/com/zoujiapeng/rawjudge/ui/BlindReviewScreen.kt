@@ -1,6 +1,5 @@
 package com.zoujiapeng.rawjudge.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -20,7 +20,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zoujiapeng.rawjudge.RawJudgeActions
@@ -30,24 +29,30 @@ import com.zoujiapeng.rawjudge.domain.Work
 
 @Composable
 fun BlindReviewScreen(state: AppUiState, actions: RawJudgeActions) {
-    val pair = actions.blindPair()
+    val pair = state.blindPair
     Column(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
             .padding(start = 16.dp, end = 16.dp, top = 42.dp, bottom = 18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Text("盲评", style = MaterialTheme.typography.titleLarge)
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("盲评", style = MaterialTheme.typography.titleLarge)
+            OutlinedButton(onClick = actions::closeBlind) { Text("关闭") }
+        }
         Text(
-            "只比较作品质量。作者、粉丝、点赞和历史排名均隐藏；单次选择只产生小权重。",
+            "只比较作品本身。作者、标题、粉丝、收藏和历史分数均由服务端隐藏；同一作品对重复投票权重归零。",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 12.sp,
             lineHeight = 17.sp
         )
         if (pair == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("可盲评作品不足。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("当前没有足够的真实公开作品可盲评。", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         } else {
             Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -58,8 +63,12 @@ fun BlindReviewScreen(state: AppUiState, actions: RawJudgeActions) {
                     actions.blindVote(pair, pair.right.id)
                 }
             }
-            Button(onClick = { actions.blindVote(pair, null) }, modifier = Modifier.fillMaxWidth()) {
-                Text("分歧太大，跳过")
+            Button(
+                onClick = { actions.blindVote(pair, null) },
+                enabled = !state.isLoading,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("无法判断，跳过")
             }
             AntiAbuseNote(pair)
         }
@@ -86,22 +95,13 @@ private fun BlindCard(
             Modifier.fillMaxSize().padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Box(
+            WorkImage(
+                work,
                 Modifier
                     .fillMaxWidth()
                     .weight(1f)
                     .clip(RoundedCornerShape(18.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    work.title,
-                    modifier = Modifier.padding(12.dp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center
-                )
-            }
+            )
             Text(
                 if (noText) "?" else "选择这张更强",
                 fontWeight = FontWeight.SemiBold,
@@ -125,7 +125,7 @@ private fun AntiAbuseNote(pair: BlindPair) {
         ) {
             Text("反作弊", fontWeight = FontWeight.Bold, fontSize = 12.sp)
             Text(
-                "序列 ${pair.sequence} · 新用户权重较低；短时间批量选择、关系链互评和极端评分会继续降权并进入审计。",
+                "序列 ${pair.sequence} · 新用户权重较低；重复比较、快速批量选择和自评由服务端拦截或降权。",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp,
