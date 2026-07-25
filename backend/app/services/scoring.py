@@ -1,18 +1,51 @@
-from datetime import datetime,timedelta,timezone
-from sqlalchemy import func,select
+from __future__ import annotations
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from ..models import Review,VoteEvent,Work
+
+from ..models import Review, User, Work
 from .review_quality import Metrics
-def place_work(w):
-    if w.moderation_status in {'needs_raw','rejected','appealing'}: return 'archive'
-    if w.raw_verified and w.score>=84 and w.confidence>=.70:return 'gallery'
-    if w.raw_verified and w.score>=64:return 'review'
-    if w.score>=45:return 'workshop'
-    return 'archive'
-def reviewer_trust(db:Session,reviewer_id:str,work_id:int|None=None):
-    count=db.scalar(select(func.count(Review.id)).where(Review.reviewer_id==reviewer_id,Review.score_counted.is_(True))) or 0
-    return min(.72,.22+count*.015)
-def apply_review(w:Work,score:int,m:Metrics,trust:float):
-    q=max(0,min(1,m.average*.72+trust*.28)); influence=max(.004,min(.045,.004+trust*q*.045)); w.score=max(1,min(99.9,w.score*(1-influence)+score*influence)); w.confidence=min(.98,w.confidence+.010+q*.020); w.ratings+=1; w.partition=place_work(w)
-def apply_blind_vote(w:Work,won:bool,weight:float):
-    w.score=max(1,min(99.9,w.score+(1.25*weight if won else -.72*weight))); w.confidence=min(.98,w.confidence+.010); w.ratings+=1; w.partition=place_work(w)
+
+
+def place_work(work: Work) -> str:
+    if work.moderation_status in {"needs_raw", "rejected", "appealing"}:
+        return "archive"
+    if work.raw_verified and work.score >= 84 and work.confidence >= 0.70:
+        return "gallery"
+    if work.raw_verified and work.score >= 64:
+        return "review"
+    if work.score >= 45:
+        return "workshop"
+    return "archive"
+
+
+def reviewer_trust(db: Session, user_id: int) -> float:
+    user = db.get(User, user_id)
+    if user is None:
+        return 0.0
+    counted = db.scalar(
+        select(func.count(Review.id)).where(
+            Review.reviewer_user_id == user_id,
+            Review.score_counted.is_(True),
+        )
+    ) or 0
+    return min(0.78, max(0.12, user.reviewer_trust + counted * 0.012))
+
+
+def apply_review(work: Work, score: int, metrics: Metrics, trust: float) -> None:
+    quality = max(0.0, min(1.0, metrics.average * 0.72 + trust * 0.28))
+    influence = max(0.004, min(0.045, 0.004 + trust * quality * 0.045))
+    work.score = max(1.0, min(99.9, work.score * (1 - influence) + score * influence))
+    work.confidence = min(0.98, work.confidence + 0.010 + quality * 0.020)
+    work.ratings += 1
+    work.partition = place_work(work)
+
+
+def apply_blind_vote(work: Work, won: bool, weight: float) -> None:
+    work.score = max(
+        1.0,
+        min(99.9, work.score + (1.25 * weight if won else -0.72 * weight)),
+    )
+    work.confidence = min(0.98, work.confidence + 0.010)
+    work.ratings += 1
+    work.partition = place_work(work)

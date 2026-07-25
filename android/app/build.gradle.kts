@@ -3,6 +3,9 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val apiBaseUrl = providers.gradleProperty("RAWJUDGE_API_BASE_URL")
+    .orElse("http://10.0.2.2:8000")
+
 android {
     namespace = "com.zoujiapeng.rawjudge"
     compileSdk = 36
@@ -11,15 +14,20 @@ android {
         applicationId = "com.zoujiapeng.rawjudge"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 3
+        versionName = "0.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+        buildConfigField("String", "API_BASE_URL", "\"${apiBaseUrl.get()}\"")
     }
 
     buildTypes {
+        debug {
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
+        }
         release {
             isMinifyEnabled = false
+            manifestPlaceholders["usesCleartextTraffic"] = "false"
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

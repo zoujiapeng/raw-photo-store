@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+VERSION="9.3.1"
+SHA256="b266d5ff6b90eada6dc3b20cb090e3731302e553a27c5d3e4df1f0d76beaff06"
+URL="https://services.gradle.org/distributions/gradle-${VERSION}-bin.zip"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CACHE_ROOT="${GRADLE_USER_HOME:-$HOME/.gradle}/rawjudge-bootstrap"
+ARCHIVE="$CACHE_ROOT/gradle-${VERSION}-bin.zip"
+DIST="$CACHE_ROOT/gradle-${VERSION}"
+
+mkdir -p "$CACHE_ROOT"
+if [[ ! -x "$DIST/bin/gradle" ]]; then
+  if [[ ! -f "$ARCHIVE" ]]; then
+    if command -v curl >/dev/null 2>&1; then
+      curl --fail --location --retry 3 --output "$ARCHIVE" "$URL"
+    elif command -v wget >/dev/null 2>&1; then
+      wget --tries=3 --output-document="$ARCHIVE" "$URL"
+    else
+      echo "curl or wget is required to download Gradle." >&2
+      exit 1
+    fi
+  fi
+  actual="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
+  if [[ "$actual" != "$SHA256" ]]; then
+    rm -f "$ARCHIVE"
+    echo "Gradle archive checksum mismatch." >&2
+    exit 1
+  fi
+  rm -rf "$DIST"
+  unzip -q "$ARCHIVE" -d "$CACHE_ROOT"
+fi
+
+exec "$DIST/bin/gradle" -p "$SCRIPT_DIR" "$@"

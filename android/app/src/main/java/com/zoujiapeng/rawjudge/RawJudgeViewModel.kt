@@ -3,210 +3,269 @@ package com.zoujiapeng.rawjudge
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.zoujiapeng.rawjudge.data.ApiException
 import com.zoujiapeng.rawjudge.data.DemoData
 import com.zoujiapeng.rawjudge.data.LocalStateStore
+import com.zoujiapeng.rawjudge.data.RawJudgeApi
+import com.zoujiapeng.rawjudge.data.SessionStore
 import com.zoujiapeng.rawjudge.domain.AppUiState
-import com.zoujiapeng.rawjudge.domain.AuditEvent
 import com.zoujiapeng.rawjudge.domain.BlindPair
 import com.zoujiapeng.rawjudge.domain.LicenseType
-import com.zoujiapeng.rawjudge.domain.ModerationEngine
-import com.zoujiapeng.rawjudge.domain.ModerationStatus
 import com.zoujiapeng.rawjudge.domain.Partition
-import com.zoujiapeng.rawjudge.domain.PartitionPolicy
-import com.zoujiapeng.rawjudge.domain.Review
-import com.zoujiapeng.rawjudge.domain.ReviewAnalyzer
 import com.zoujiapeng.rawjudge.domain.ReviewDimension
 import com.zoujiapeng.rawjudge.domain.UploadDraft
 import com.zoujiapeng.rawjudge.domain.Work
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlin.math.max
+import kotlinx.coroutines.withContext
 
 class RawJudgeViewModel(application: Application) : AndroidViewModel(application), RawJudgeActions {
     private val store = LocalStateStore(application)
+    private val sessionStore = SessionStore(application)
+    private val api = RawJudgeApi(application)
     private var persistJob: Job? = null
-    private val _uiState = MutableStateFlow(store.load() ?: AppUiState(works = DemoData.works()))
+    private val initial = store.load() ?: AppUiState(works = DemoData.works())
+    private val _uiState = MutableStateFlow(initial.copy(isLoading = true))
     val uiState: StateFlow<AppUiState> = _uiState.asStateFlow()
 
-    override fun selectPartition(partition: Partition) = mutate { copy(activePartition = partition, selectedWorkId = null) }
-    override fun selectWork(id: Long) = mutate { copy(selectedWorkId = id) }
+    init {
+        viewModelScope.launch { bootstrap() }
+    }
 
+    override fun selectPartition(partition: Partition) = mutate {
+        copy(activePartition = partition, selectedWorkId = null)
+    }
+
+    override fun selectWork(id: Long) = mutate { copy(selectedWorkId = id) }
     override fun toggleDarkMode() = mutate { copy(settings = settings.copy(darkMode = !settings.darkMode)) }
     override fun toggleNoText() = mutate { copy(settings = settings.copy(noTextControls = !settings.noTextControls)) }
     override fun toggleImmersive() = mutate { copy(settings = settings.copy(immersive98 = !settings.immersive98)) }
     override fun toggleHints() = mutate { copy(settings = settings.copy(hintsVisible = !settings.hintsVisible)) }
-    override fun setReviewDimension(dimension: ReviewDimension) = mutate { copy(settings = settings.copy(reviewDimension = dimension)) }
+    override fun setReviewDimension(dimension: ReviewDimension) = mutate {
+        copy(settings = settings.copy(reviewDimension = dimension))
+    }
 
-    override fun favorite(workId: Long) = updateWork(workId) { work ->
-        work.copy(
-            isFavorite = !work.isFavorite,
-            favorites = if (work.isFavorite) max(0, work.favorites - 1) else work.favorites + 1,
-            auditTrail = work.auditTrail + AuditEvent(nowId(), "favorite", "收藏状态改变；该数据不进入质量分。")
-        )
+    override fun refresh() {
+        remote("同步完成") {
+            val user = api.me()
+            val works = api.listWorks()
+            mutate {
+                copy(
+                    works = works,
+                    currentUser = user,
+                    isOnline = true,
+                    selectedWorkId = selectedWorkId?.takeIf { id -> works.any { it.id == id } }
+                )
+            }
+        }
+    }
+
+    override fun showUpload(show: Boolean) = mutate { copy(uploadVisible = show) }
+    override fun showProfile(show: Boolean) = mutate { copy(profileVisible = show) }
+
+    override fun favorite(workId: Long) {
+        val work = _uiState.value.works.firstOrNull { it.id == workId } ?: return
+        remote {
+            val updated = api.favorite(workId, !work.isFavorite)
+            replaceWork(updated)
+        }
     }
 
     override fun addReview(workId: Long, body: String, score: Int) {
         if (body.isBlank()) return
-        updateWork(workId) { work ->
-            val normalizedScore = score.coerceIn(1, 100)
-            val metrics = ReviewAnalyzer.analyze(body)
-            val extreme = normalizedScore <= 10 || normalizedScore >= 95
-            val sufficientlySpecific = body.trim().length >= 40 && metrics.average >= 0.45f
-            val provisional = Review(
-                id = nowId(),
-                author = _uiState.value.userName,
-                body = body.trim(),
-                score = normalizedScore,
-                metrics = metrics,
-                reviewerTrust = 0.28f
-            )
-            val review = provisional.copy(
-                scoreCounted = !provisional.folded && (!extreme || sufficientlySpecific)
-            )
-            val newScore = PartitionPolicy.weightedScore(work, review)
-            val updated = work.copy(
-                score = newScore,
-                confidence = if (review.scoreCounted) (work.confidence + 0.010 + review.quality * 0.020).coerceAtMost(0.98) else work.confidence,
-                ratings = work.ratings + if (review.scoreCounted) 1 else 0,
-                reviews = listOf(review) + work.reviews,
-                auditTrail = work.auditTrail + AuditEvent(
-                    nowId(),
-                    "review",
-                    "评语被归类为 ${review.metrics.strongest.label}，质量权重 ${"%.2f".format(review.quality)}；" +
-                        if (review.scoreCounted) "评分已计入。" else "低信息或无依据极端分未计入质量分。"
+        remote("评语已由服务端分析并记录") {
+            api.addReview(workId, body.trim(), score.coerceIn(1, 100))
+            reloadWorks(workId)
+        }
+    }
+
+    override fun submitUpload(draft: UploadDraft) {
+        remote("上传和初审完成") {
+            val uploaded = api.upload(draft)
+            val works = api.listWorks()
+            mutate {
+                copy(
+                    works = works,
+                    uploadVisible = false,
+                    activePartition = uploaded.partition,
+                    selectedWorkId = uploaded.id,
+                    isOnline = true,
+                    toastMessage = uploaded.moderationSummary
                 )
-            )
-            updated.copy(partition = PartitionPolicy.place(updated))
-        }
-    }
-
-    override fun submitUpload(draft: UploadDraft): Long {
-        val id = (_uiState.value.works.maxOfOrNull { it.id } ?: 0L) + 1L
-        val result = ModerationEngine.moderate(draft, id)
-        var work = Work(
-            id = id,
-            title = draft.title.ifBlank { draft.imageFileName ?: "未命名作品" },
-            description = draft.description,
-            authorName = _uiState.value.userName,
-            handle = _uiState.value.userHandle,
-            photoUri = draft.photoUri,
-            imageFileName = draft.imageFileName,
-            rawFileName = draft.rawFileName,
-            rawVerified = result.rawVerified,
-            score = result.score,
-            confidence = result.confidence,
-            partition = Partition.REVIEW,
-            moderationStatus = result.status,
-            moderationSummary = result.summary,
-            reviews = listOf(
-                Review(
-                    id = nowId(),
-                    author = "AI 初评（已标注）",
-                    body = "系统已完成文件规则检查。下一步由盲评和高质量评论更新质量分与置信度。",
-                    score = result.score.toInt(),
-                    metrics = ReviewAnalyzer.analyze("建议评审具体讨论构图、色彩、曝光、叙事和可改进方向。"),
-                    isAi = true,
-                    reviewerTrust = 0.35f,
-                    scoreCounted = false
-                )
-            ),
-            auditTrail = result.audit,
-            licenses = buildList {
-                if (draft.allowPreviewDownload) add(com.zoujiapeng.rawjudge.domain.LicenseGrant(LicenseType.PREVIEW, draft.previewPrice, "个人欣赏；禁止商用、转售和 AI 训练。"))
-                if (draft.allowRawLicense && result.rawVerified) add(com.zoujiapeng.rawjudge.domain.LicenseGrant(LicenseType.RAW_STUDY, draft.rawPrice, "仅学习研究；版权仍归作者。"))
-            },
-            paletteSeed = id.toInt()
-        )
-        work = work.copy(partition = PartitionPolicy.place(work))
-        mutate {
-            copy(
-                works = listOf(work) + works,
-                activePartition = work.partition,
-                selectedWorkId = work.id,
-                toastMessage = result.summary
-            )
-        }
-        return id
-    }
-
-    override fun appeal(workId: Long) = updateWork(workId) { work ->
-        val updated = work.copy(
-            moderationStatus = ModerationStatus.APPEALING,
-            auditTrail = work.auditTrail + AuditEvent(nowId(), "appeal", "作者提交申诉；等待高信誉评审或人工复核。")
-        )
-        updated.copy(partition = PartitionPolicy.place(updated))
-    }
-
-    override fun report(workId: Long) = updateWork(workId) { work ->
-        work.copy(auditTrail = work.auditTrail + AuditEvent(nowId(), "report", "收到举报；已记录账号、时间和行为轨迹，等待复核。"))
-    }
-
-    override fun purchase(workId: Long, type: LicenseType) = updateWork(workId) { work ->
-        val offering = work.licenses.firstOrNull { it.type == type }
-        when {
-            offering == null -> work
-            offering.granted -> work.copy(
-                auditTrail = work.auditTrail + AuditEvent(nowId(), "license", "重复授权请求被幂等忽略。")
-            )
-            else -> work.copy(
-                downloads = work.downloads + 1,
-                licenses = work.licenses.map { if (it.type == type) it.copy(granted = true) else it },
-                auditTrail = work.auditTrail + AuditEvent(nowId(), "license", "生成 ${type.label} 的不可变授权快照；版权仍归作者。")
-            )
-        }
-    }
-
-    override fun blindPair(): BlindPair? {
-        val candidates = _uiState.value.works.filter { it.rawVerified && it.moderationStatus !in setOf(ModerationStatus.REJECTED, ModerationStatus.NEEDS_RAW) }
-        if (candidates.size < 2) return null
-        val sequence = _uiState.value.blindSequence
-        return BlindPair(candidates[sequence % candidates.size], candidates[(sequence + 1) % candidates.size], sequence)
-    }
-
-    override fun blindVote(pair: BlindPair, winnerId: Long?) = mutate {
-        val key = listOf(pair.left.id, pair.right.id).sorted().joinToString(":")
-        val skipped = winnerId == null
-        val duplicate = !skipped && key in blindHistory
-        val voterTrust = if (duplicate) 0.0 else 0.22
-        val updatedWorks = works.map { work ->
-            when (work.id) {
-                pair.left.id -> blindUpdate(work, winnerId == pair.left.id, skipped, voterTrust, duplicate)
-                pair.right.id -> blindUpdate(work, winnerId == pair.right.id, skipped, voterTrust, duplicate)
-                else -> work
             }
         }
-        copy(
-            works = updatedWorks,
-            blindSequence = blindSequence + 1,
-            blindHistory = if (skipped) blindHistory else blindHistory + key,
-            toastMessage = if (duplicate) "同一作品对的重复盲评权重已归零。" else toastMessage
-        )
+    }
+
+    override fun appeal(workId: Long, reason: String) {
+        remote("申诉已进入复核队列") {
+            api.appeal(workId, reason.ifBlank { "请复核 RAW 验证和审核结果。" })
+            reloadWorks(workId)
+        }
+    }
+
+    override fun report(workId: Long, reason: String) {
+        remote("举报已记录") {
+            api.report(workId, reason.ifBlank { "请复核该作品的内容与 RAW 认证状态。" })
+        }
+    }
+
+    override fun purchase(workId: Long, type: LicenseType) {
+        remote("授权快照已生成") {
+            api.purchase(workId, type)
+            reloadWorks(workId)
+        }
+    }
+
+    override fun download(workId: Long, raw: Boolean) {
+        val work = _uiState.value.works.firstOrNull { it.id == workId } ?: return
+        val name = if (raw) work.rawFileName ?: "rawjudge-$workId.dng"
+        else work.imageFileName ?: "rawjudge-$workId.jpg"
+        remote {
+            val file = api.download(workId, raw, name)
+            mutate { copy(toastMessage = "文件已保存到应用缓存：${file.name}") }
+        }
+    }
+
+    override fun openBlind() {
+        remote {
+            val pair = api.blindPair(_uiState.value.blindSequence)
+            mutate { copy(blindVisible = true, blindPair = pair) }
+        }
+    }
+
+    override fun closeBlind() = mutate { copy(blindVisible = false, blindPair = null) }
+
+    override fun blindVote(pair: BlindPair, winnerId: Long?) {
+        remote("盲评已记录") {
+            api.blindVote(pair, winnerId)
+            val nextSequence = pair.sequence + 1
+            val nextPair = runCatching { api.blindPair(nextSequence) }.getOrNull()
+            val works = api.listWorks()
+            mutate {
+                copy(
+                    works = works,
+                    blindSequence = nextSequence,
+                    blindPair = nextPair,
+                    blindVisible = nextPair != null,
+                    toastMessage = if (nextPair == null) "当前没有更多可盲评作品。" else toastMessage
+                )
+            }
+        }
+    }
+
+    override fun updateProfile(displayName: String, handle: String, externalUrl: String?) {
+        remote("资料已更新") {
+            val user = api.updateProfile(displayName.trim(), handle.trim(), externalUrl?.trim())
+            val works = api.listWorks()
+            mutate { copy(currentUser = user, works = works, profileVisible = false) }
+        }
     }
 
     override fun clearToast() = mutate { copy(toastMessage = null) }
 
-    private fun blindUpdate(work: Work, won: Boolean, skipped: Boolean, trust: Double, duplicate: Boolean): Work {
-        if (skipped) return work
-        if (duplicate) return work.copy(
-            auditTrail = work.auditTrail + AuditEvent(nowId(), "anti_abuse", "同一账号重复比较同一作品对，评分权重归零。")
-        )
-        val delta = if (won) 1.25 * trust else -0.72 * trust
-        val updated = work.copy(
-            score = (work.score + delta).coerceIn(1.0, 99.9),
-            confidence = (work.confidence + 0.010).coerceAtMost(0.98),
-            ratings = work.ratings + 1,
-            auditTrail = work.auditTrail + AuditEvent(nowId(), "blind_vote", "完成一次盲评；作者、粉丝和收藏数未展示。")
-        )
-        return updated.copy(partition = PartitionPolicy.place(updated))
+    private suspend fun bootstrap() {
+        withContext(Dispatchers.IO) {
+            try {
+                val existingToken = sessionStore.token
+                val user = if (existingToken.isNullOrBlank()) {
+                    val session = api.register()
+                    sessionStore.token = session.token
+                    api.token = session.token
+                    session.user
+                } else {
+                    api.token = existingToken
+                    try {
+                        api.me()
+                    } catch (error: ApiException) {
+                        if (error.statusCode != 401) throw error
+                        sessionStore.clear()
+                        val session = api.register()
+                        sessionStore.token = session.token
+                        api.token = session.token
+                        session.user
+                    }
+                }
+                val works = api.listWorks()
+                mutate {
+                    copy(
+                        works = works.ifEmpty { DemoData.works() },
+                        currentUser = user,
+                        isLoading = false,
+                        isOnline = true,
+                        toastMessage = null
+                    )
+                }
+            } catch (error: Exception) {
+                mutate {
+                    copy(
+                        isLoading = false,
+                        isOnline = false,
+                        works = works.ifEmpty { DemoData.works() },
+                        toastMessage = "后端不可用，当前为离线只读：${friendly(error)}"
+                    )
+                }
+            }
+        }
     }
 
-    private fun updateWork(id: Long, transform: (Work) -> Work) = mutate {
-        copy(works = works.map { if (it.id == id) transform(it) else it })
+    private fun remote(success: String? = null, block: suspend () -> Unit) {
+        if (!_uiState.value.isOnline && sessionStore.token.isNullOrBlank()) {
+            mutate { copy(toastMessage = "离线状态不能执行此操作；请启动后端并刷新。") }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            mutate { copy(isLoading = true) }
+            try {
+                block()
+                mutate {
+                    copy(
+                        isLoading = false,
+                        isOnline = true,
+                        toastMessage = success ?: toastMessage
+                    )
+                }
+            } catch (error: Exception) {
+                mutate {
+                    copy(
+                        isLoading = false,
+                        isOnline = error is ApiException,
+                        toastMessage = friendly(error)
+                    )
+                }
+            }
+        }
+    }
+
+    private fun reloadWorks(selectedId: Long? = _uiState.value.selectedWorkId) {
+        val works = api.listWorks()
+        mutate {
+            copy(
+                works = works,
+                selectedWorkId = selectedId?.takeIf { id -> works.any { it.id == id } }
+            )
+        }
+    }
+
+    private fun replaceWork(updated: Work) = mutate {
+        copy(works = works.map { if (it.id == updated.id) updated else it })
+    }
+
+    private fun friendly(error: Exception): String = when (error) {
+        is ApiException -> when (error.statusCode) {
+            401 -> "会话失效，请重新打开应用。"
+            402 -> "这是付费授权，但当前未配置支付服务，未生成虚假购买。"
+            403 -> "当前账号没有执行该操作的权限。"
+            409 -> error.message ?: "请求与当前状态冲突。"
+            else -> error.message ?: "服务器请求失败。"
+        }
+        is IOException -> "无法连接后端：${error.message ?: "网络错误"}"
+        else -> error.message ?: "操作失败"
     }
 
     private inline fun mutate(block: AppUiState.() -> AppUiState) {
@@ -214,12 +273,10 @@ class RawJudgeViewModel(application: Application) : AndroidViewModel(application
         _uiState.value = next
         persistJob?.cancel()
         persistJob = viewModelScope.launch(Dispatchers.IO) {
-            delay(120)
+            delay(150)
             store.save(next)
         }
     }
-
-    private fun nowId(): Long = System.nanoTime()
 }
 
 interface RawJudgeActions {
@@ -230,13 +287,19 @@ interface RawJudgeActions {
     fun toggleImmersive()
     fun toggleHints()
     fun setReviewDimension(dimension: ReviewDimension)
+    fun refresh()
+    fun showUpload(show: Boolean)
+    fun showProfile(show: Boolean)
     fun favorite(workId: Long)
     fun addReview(workId: Long, body: String, score: Int)
-    fun submitUpload(draft: UploadDraft): Long
-    fun appeal(workId: Long)
-    fun report(workId: Long)
+    fun submitUpload(draft: UploadDraft)
+    fun appeal(workId: Long, reason: String = "")
+    fun report(workId: Long, reason: String = "")
     fun purchase(workId: Long, type: LicenseType)
-    fun blindPair(): BlindPair?
+    fun download(workId: Long, raw: Boolean)
+    fun openBlind()
+    fun closeBlind()
     fun blindVote(pair: BlindPair, winnerId: Long?)
+    fun updateProfile(displayName: String, handle: String, externalUrl: String?)
     fun clearToast()
 }

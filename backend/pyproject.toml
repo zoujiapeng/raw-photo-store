@@ -1,6 +1,6 @@
 [project]
 name = "rawjudge-api"
-version = "0.1.0"
+version = "0.3.0"
 description = "RAW-certified photography review API"
 requires-python = ">=3.11"
 dependencies = [
@@ -9,11 +9,13 @@ dependencies = [
   "sqlalchemy==2.0.50",
   "pydantic==2.13.4",
   "python-multipart==0.0.22",
-  "httpx==0.28.1"
+  "httpx==0.28.1",
+  "pillow==12.1.0"
 ]
 
 [project.optional-dependencies]
 dev = ["pytest==9.0.2"]
+postgres = ["psycopg[binary]==3.3.2"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
