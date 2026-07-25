@@ -15,14 +15,14 @@ import com.zoujiapeng.rawjudge.domain.ReviewMetrics
 import com.zoujiapeng.rawjudge.domain.SessionUser
 import com.zoujiapeng.rawjudge.domain.UploadDraft
 import com.zoujiapeng.rawjudge.domain.Work
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.time.Instant
+import org.json.JSONArray
+import org.json.JSONObject
 
 class ApiException(val statusCode: Int, message: String) : Exception(message)
 
@@ -107,7 +107,7 @@ class RawJudgeApi(context: Context) {
         val body = JSONObject()
             .put("left_work_id", pair.left.id)
             .put("right_work_id", pair.right.id)
-        if (winnerId == null) body.put(JSONObject.NULL) else body.put("winner_work_id", winnerId)
+            .put("winner_work_id", winnerId ?: JSONObject.NULL)
         requestObject("POST", "/v1/blind/vote", body)
     }
 
@@ -207,9 +207,7 @@ class RawJudgeApi(context: Context) {
             connectTimeout = 15_000
             readTimeout = 45_000
             setRequestProperty("Accept", "application/json")
-            if (authenticated) {
-                token?.let { setRequestProperty("Authorization", "Bearer $it") }
-            }
+            if (authenticated) token?.let { setRequestProperty("Authorization", "Bearer $it") }
         }
     }
 
