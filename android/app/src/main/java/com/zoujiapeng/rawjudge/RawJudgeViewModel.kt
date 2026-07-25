@@ -30,7 +30,9 @@ class RawJudgeViewModel(application: Application) : AndroidViewModel(application
     private val sessionStore = SessionStore(application)
     private val api = RawJudgeApi(application)
     private var persistJob: Job? = null
-    private val initial = store.load() ?: AppUiState(works = DemoData.works())
+    private val initial = (store.load() ?: AppUiState(works = DemoData.works())).copy(
+        serverUrl = sessionStore.serverUrl
+    )
     private val _uiState = MutableStateFlow(initial.copy(isLoading = true))
     val uiState: StateFlow<AppUiState> = _uiState.asStateFlow()
 
@@ -59,9 +61,32 @@ class RawJudgeViewModel(application: Application) : AndroidViewModel(application
                 copy(
                     works = works,
                     currentUser = user,
+                    serverUrl = api.currentServerUrl(),
                     isOnline = true,
                     selectedWorkId = selectedWorkId?.takeIf { id -> works.any { it.id == id } }
                 )
+            }
+        }
+    }
+
+    override fun changeServerUrl(serverUrl: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                api.configureServerUrl(serverUrl)
+                sessionStore.clearToken()
+                mutate {
+                    copy(
+                        currentUser = null,
+                        serverUrl = api.currentServerUrl(),
+                        isOnline = false,
+                        isLoading = true,
+                        profileVisible = false,
+                        toastMessage = "正在连接新后端…"
+                    )
+                }
+                bootstrap()
+            } catch (error: Exception) {
+                mutate { copy(isLoading = false, toastMessage = friendly(error)) }
             }
         }
     }
@@ -184,7 +209,7 @@ class RawJudgeViewModel(application: Application) : AndroidViewModel(application
                         api.me()
                     } catch (error: ApiException) {
                         if (error.statusCode != 401) throw error
-                        sessionStore.clear()
+                        sessionStore.clearToken()
                         val session = api.register()
                         sessionStore.token = session.token
                         api.token = session.token
@@ -196,6 +221,7 @@ class RawJudgeViewModel(application: Application) : AndroidViewModel(application
                     copy(
                         works = works.ifEmpty { DemoData.works() },
                         currentUser = user,
+                        serverUrl = api.currentServerUrl(),
                         isLoading = false,
                         isOnline = true,
                         toastMessage = null
@@ -204,6 +230,7 @@ class RawJudgeViewModel(application: Application) : AndroidViewModel(application
             } catch (error: Exception) {
                 mutate {
                     copy(
+                        serverUrl = api.currentServerUrl(),
                         isLoading = false,
                         isOnline = false,
                         works = works.ifEmpty { DemoData.works() },
@@ -216,7 +243,7 @@ class RawJudgeViewModel(application: Application) : AndroidViewModel(application
 
     private fun remote(success: String? = null, block: suspend () -> Unit) {
         if (!_uiState.value.isOnline && sessionStore.token.isNullOrBlank()) {
-            mutate { copy(toastMessage = "离线状态不能执行此操作；请启动后端并刷新。") }
+            mutate { copy(toastMessage = "离线状态不能执行此操作；请填写可访问的后端地址。") }
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
@@ -258,7 +285,7 @@ class RawJudgeViewModel(application: Application) : AndroidViewModel(application
 
     private fun friendly(error: Exception): String = when (error) {
         is ApiException -> when (error.statusCode) {
-            401 -> "会话失效，请重新打开应用。"
+            401 -> "会话失效，请重新连接后端。"
             402 -> "这是付费授权，但当前未配置支付服务，未生成虚假购买。"
             403 -> "当前账号没有执行该操作的权限。"
             409 -> error.message ?: "请求与当前状态冲突。"
@@ -288,6 +315,7 @@ interface RawJudgeActions {
     fun toggleHints()
     fun setReviewDimension(dimension: ReviewDimension)
     fun refresh()
+    fun changeServerUrl(serverUrl: String)
     fun showUpload(show: Boolean)
     fun showProfile(show: Boolean)
     fun favorite(workId: Long)
