@@ -26,8 +26,32 @@ jobs:
       - name: Install backend
         run: pip install -e './backend[dev]'
       - name: Test backend
+        id: backend_test
+        continue-on-error: true
         working-directory: backend
-        run: pytest
+        shell: bash
+        run: |
+          set +e
+          pytest -vv > /tmp/rawjudge-pytest.log 2>&1
+          status=$?
+          echo "$status" > /tmp/rawjudge-pytest-status
+          tail -n 360 /tmp/rawjudge-pytest.log > /tmp/rawjudge-pytest-tail.log
+          exit "$status"
+      - name: Upload backend diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rawjudge-backend-diagnostics
+          path: |
+            /tmp/rawjudge-pytest-tail.log
+            /tmp/rawjudge-pytest-status
+          if-no-files-found: error
+          retention-days: 7
+      - name: Fail when backend tests failed
+        if: steps.backend_test.outcome == 'failure'
+        run: |
+          cat /tmp/rawjudge-pytest-tail.log
+          exit 1
       - name: Compile Python sources
         working-directory: backend
         run: python -m compileall -q app tests
@@ -59,7 +83,7 @@ jobs:
           gradle -p android :app:testDebugUnitTest :app:assembleDebug --stacktrace > /tmp/rawjudge-gradle.log 2>&1
           status=$?
           echo "$status" > /tmp/rawjudge-gradle-status
-          tail -n 320 /tmp/rawjudge-gradle.log > /tmp/rawjudge-gradle-tail.log
+          tail -n 360 /tmp/rawjudge-gradle.log > /tmp/rawjudge-gradle-tail.log
           exit "$status"
       - name: Upload Android diagnostic log
         if: always()
