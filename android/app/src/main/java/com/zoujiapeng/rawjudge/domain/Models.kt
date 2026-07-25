@@ -181,6 +181,7 @@ data class AppUiState(
     val blindSequence: Int = 0,
     val blindPair: BlindPair? = null,
     val currentUser: SessionUser? = null,
+    val serverUrl: String = "",
     val isLoading: Boolean = false,
     val isOnline: Boolean = false,
     val uploadVisible: Boolean = false,
