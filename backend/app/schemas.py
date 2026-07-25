@@ -2,7 +2,34 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field, HttpUrl, field_validator
+
+
+class AnonymousAuthCreate(BaseModel):
+    display_name: str = Field(default="摄影者", min_length=1, max_length=120)
+    handle: str | None = Field(default=None, max_length=120)
+
+
+class UserUpdate(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=120)
+    handle: str | None = Field(default=None, min_length=2, max_length=120)
+    external_url: HttpUrl | None = None
+
+
+class UserOut(BaseModel):
+    id: int
+    display_name: str
+    handle: str
+    external_url: str | None
+    reviewer_trust: float
+    is_admin: bool
+    created_at: datetime
+
+
+class AuthOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
 
 
 class ReviewMetricsOut(BaseModel):
@@ -16,15 +43,13 @@ class ReviewMetricsOut(BaseModel):
 
 
 class ReviewCreate(BaseModel):
-    reviewer_id: str = Field(min_length=1, max_length=120)
-    author_name: str = Field(min_length=1, max_length=120)
     body: str = Field(min_length=1, max_length=4000)
     score: int = Field(ge=1, le=100)
 
 
 class ReviewOut(BaseModel):
     id: int
-    reviewer_id: str
+    reviewer_user_id: int | None
     author_name: str
     body: str
     score: int
@@ -49,13 +74,14 @@ class LicenseOut(BaseModel):
     license_type: str
     price: float
     terms: str
-    buyer_id: str | None
+    buyer_user_id: int | None
     granted: bool
     granted_at: datetime | None
 
 
 class WorkOut(BaseModel):
     id: int
+    owner_id: int | None
     title: str
     description: str
     author_name: str
@@ -76,42 +102,50 @@ class WorkOut(BaseModel):
     followers: int
     ratings: int
     official_sample: bool
+    is_owner: bool
+    is_favorite: bool
+    can_download_original: bool
+    can_download_raw: bool
     created_at: datetime
     reviews: list[ReviewOut]
     audit: list[AuditOut]
     licenses: list[LicenseOut]
 
 
+class BlindWorkOut(BaseModel):
+    id: int
+    image_url: str | None
+    raw_verified: bool
+    confidence: float
+
+
 class FavoriteRequest(BaseModel):
-    user_id: str = Field(min_length=1, max_length=120)
     favorite: bool = True
 
 
 class BlindPairOut(BaseModel):
-    left: WorkOut
-    right: WorkOut
+    left: BlindWorkOut
+    right: BlindWorkOut
     sequence: int
 
 
 class BlindVoteRequest(BaseModel):
-    voter_id: str = Field(min_length=1, max_length=120)
     left_work_id: int
     right_work_id: int
     winner_work_id: int | None = None
 
 
 class AppealCreate(BaseModel):
-    author_id: str = Field(min_length=1, max_length=120)
     reason: str = Field(min_length=3, max_length=4000)
 
 
 class ReportCreate(BaseModel):
-    reporter_id: str = Field(min_length=1, max_length=120)
     reason: str = Field(min_length=3, max_length=4000)
 
 
-class LicensePurchase(BaseModel):
-    buyer_id: str = Field(min_length=1, max_length=120)
+class AdminModerationUpdate(BaseModel):
+    moderation_status: str = Field(pattern="^(reviewing|published|rejected|needs_raw)$")
+    summary: str = Field(min_length=3, max_length=4000)
 
 
 class MessageOut(BaseModel):
@@ -122,3 +156,8 @@ class HealthOut(BaseModel):
     status: str
     database: str
     ai_mode: str
+
+
+class ReadyOut(BaseModel):
+    status: str
+    database: str
