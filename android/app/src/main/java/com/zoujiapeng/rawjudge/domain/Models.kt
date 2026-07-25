@@ -179,12 +179,13 @@ data class AppUiState(
     val settings: UiSettings = UiSettings(),
     val selectedWorkId: Long? = null,
     val blindSequence: Int = 0,
-    val blindHistory: Set<String> = emptySet(),
+    val blindPair: BlindPair? = null,
     val currentUser: SessionUser? = null,
     val isLoading: Boolean = false,
     val isOnline: Boolean = false,
     val uploadVisible: Boolean = false,
     val blindVisible: Boolean = false,
+    val profileVisible: Boolean = false,
     val toastMessage: String? = null
 ) : Serializable {
     val filteredWorks: List<Work>
