@@ -3,7 +3,6 @@ package com.zoujiapeng.rawjudge.data
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
-import com.zoujiapeng.rawjudge.BuildConfig
 import com.zoujiapeng.rawjudge.domain.AuditEvent
 import com.zoujiapeng.rawjudge.domain.BlindPair
 import com.zoujiapeng.rawjudge.domain.LicenseGrant
@@ -19,6 +18,7 @@ import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import java.time.Instant
 import org.json.JSONArray
@@ -31,8 +31,23 @@ data class AuthSession(val token: String, val user: SessionUser)
 class RawJudgeApi(context: Context) {
     private val resolver: ContentResolver = context.contentResolver
     private val cacheDir: File = context.cacheDir.resolve("downloads").apply { mkdirs() }
-    private val baseUrl = BuildConfig.API_BASE_URL.trimEnd('/')
+    private val sessionStore = SessionStore(context)
+    private var baseUrl = sessionStore.serverUrl.trimEnd('/')
     var token: String? = null
+
+    fun currentServerUrl(): String = baseUrl
+
+    fun configureServerUrl(value: String) {
+        val normalized = value.trim().trimEnd('/')
+        val uri = runCatching { URI(normalized) }
+            .getOrElse { throw IllegalArgumentException("后端地址格式无效") }
+        require(uri.scheme in setOf("http", "https") && !uri.host.isNullOrBlank()) {
+            "后端地址必须是完整的 http:// 或 https:// 地址"
+        }
+        baseUrl = normalized
+        sessionStore.serverUrl = normalized
+        token = null
+    }
 
     fun register(displayName: String = "Android 摄影者"): AuthSession {
         val body = JSONObject().put("display_name", displayName)
@@ -114,6 +129,8 @@ class RawJudgeApi(context: Context) {
     fun upload(draft: UploadDraft): Work {
         val imageUri = draft.photoUri?.let(Uri::parse)
             ?: throw IllegalArgumentException("请选择展示图")
+        val rawUri = draft.rawUri?.let(Uri::parse)
+            ?: throw IllegalArgumentException("请选择 RAW 文件")
         val boundary = "RAWJudge-${System.nanoTime()}"
         val connection = open("POST", "/v1/works", authenticated = true).apply {
             doOutput = true
@@ -145,9 +162,7 @@ class RawJudgeApi(context: Context) {
             text("preview_price", draft.previewPrice.toString())
             text("raw_price", draft.rawPrice.toString())
             file("image", imageUri, draft.imageFileName ?: "photo.jpg")
-            draft.rawUri?.let { rawUri ->
-                file("raw", Uri.parse(rawUri), draft.rawFileName ?: "photo.dng")
-            }
+            file("raw", rawUri, draft.rawFileName ?: "photo.dng")
             output.write("--$boundary--\r\n".toByteArray())
         }
         return parseWork(readObject(connection))
