@@ -1,0 +1,16 @@
+services:
+  api:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: sqlite:////data/rawjudge.db
+      UPLOAD_DIR: /uploads
+      CONTENT_POLICY_PROFILE: global
+    volumes:
+      - rawjudge-data:/data
+      - rawjudge-uploads:/uploads
+
+volumes:
+  rawjudge-data:
+  rawjudge-uploads:

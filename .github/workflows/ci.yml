@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Install backend
+        run: pip install -e './backend[dev]'
+      - name: Test backend
+        working-directory: backend
+        run: pytest
+      - name: Compile Python sources
+        working-directory: backend
+        run: python -m compileall -q app tests
+      - name: Build API container
+        run: docker build --tag rawjudge-api:ci backend
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK 36
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+      - name: Test and build Android
+        id: android_build
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          gradle -p android :app:testDebugUnitTest :app:assembleDebug --stacktrace > /tmp/rawjudge-gradle.log 2>&1
+          status=$?
+          echo "$status" > /tmp/rawjudge-gradle-status
+          tail -n 320 /tmp/rawjudge-gradle.log > /tmp/rawjudge-gradle-tail.log
+          exit "$status"
+      - name: Upload Android diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rawjudge-android-diagnostics
+          path: |
+            /tmp/rawjudge-gradle-tail.log
+            /tmp/rawjudge-gradle-status
+          if-no-files-found: error
+          retention-days: 7
+      - name: Fail when Android build failed
+        if: steps.android_build.outcome == 'failure'
+        run: |
+          cat /tmp/rawjudge-gradle-tail.log
+          exit 1
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: rawjudge-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,35 @@
+# Android
+.gradle/
+**/build/
+local.properties
+*.iml
+.idea/
+.cxx/
+.externalNativeBuild/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Runtime data
+.env
+backend/data/
+backend/uploads/
+*.db
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local verification
+.tmp-kotlin/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+data/
+uploads/

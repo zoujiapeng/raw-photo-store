@@ -1,0 +1,23 @@
+name: Bug report
+description: 报告可复现的问题
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题
+      description: 请说明实际结果、预期结果和复现步骤。
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本/Commit
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      render: shell
