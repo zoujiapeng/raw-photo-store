@@ -26,4 +26,6 @@ class SessionStore(context: Context) {
     fun clearToken() {
         preferences.edit().remove("token").apply()
     }
+
+    fun clear() = clearToken()
 }
