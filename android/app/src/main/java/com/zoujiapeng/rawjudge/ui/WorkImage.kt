@@ -2,6 +2,8 @@ package com.zoujiapeng.rawjudge.ui
 
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.LruCache
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -22,6 +24,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -32,43 +35,89 @@ import java.net.URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-@Composable
-fun WorkImage(work: Work, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    var bitmap by remember(work.imageUrl, work.photoUri) { mutableStateOf<ImageBitmap?>(null) }
-    var failed by remember(work.imageUrl, work.photoUri) { mutableStateOf(false) }
+private object WorkImageMemoryCache {
+    private val cache = LruCache<String, ImageBitmap>(24)
 
-    LaunchedEffect(work.imageUrl, work.photoUri) {
+    fun get(key: String): ImageBitmap? = synchronized(cache) { cache.get(key) }
+
+    fun put(key: String, bitmap: ImageBitmap) {
+        synchronized(cache) { cache.put(key, bitmap) }
+    }
+}
+
+@Composable
+fun WorkImage(
+    work: Work,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop,
+    showErrorLabel: Boolean = true,
+    backgroundColor: Color = Color.Unspecified
+) {
+    val context = LocalContext.current
+    val imageKey = work.photoUri ?: work.imageUrl ?: "placeholder:${work.paletteSeed}"
+    var bitmap by remember(imageKey) { mutableStateOf(WorkImageMemoryCache.get(imageKey)) }
+    var failed by remember(imageKey) { mutableStateOf(false) }
+    val imageAlpha by animateFloatAsState(
+        targetValue = if (bitmap == null) 0f else 1f,
+        label = "work-image-alpha"
+    )
+    val resolvedBackground = if (backgroundColor == Color.Unspecified) {
+        MaterialTheme.colorScheme.surfaceVariant
+    } else {
+        backgroundColor
+    }
+
+    LaunchedEffect(imageKey) {
+        WorkImageMemoryCache.get(imageKey)?.let {
+            bitmap = it
+            failed = false
+            return@LaunchedEffect
+        }
         failed = false
-        bitmap = withContext(Dispatchers.IO) {
+        val loaded = withContext(Dispatchers.IO) {
             runCatching {
                 when {
                     !work.photoUri.isNullOrBlank() -> context.contentResolver
                         .openInputStream(Uri.parse(work.photoUri))
                         ?.use { BitmapFactory.decodeStream(it)?.asImageBitmap() }
+
                     !work.imageUrl.isNullOrBlank() -> {
                         val connection = URL(work.imageUrl).openConnection() as HttpURLConnection
-                        connection.connectTimeout = 12_000
-                        connection.readTimeout = 20_000
-                        connection.inputStream.use { BitmapFactory.decodeStream(it)?.asImageBitmap() }
+                        try {
+                            connection.connectTimeout = 12_000
+                            connection.readTimeout = 20_000
+                            connection.instanceFollowRedirects = true
+                            connection.connect()
+                            if (connection.responseCode !in 200..299) return@runCatching null
+                            connection.inputStream.use { BitmapFactory.decodeStream(it)?.asImageBitmap() }
+                        } finally {
+                            connection.disconnect()
+                        }
                     }
+
                     else -> null
                 }
             }.getOrNull()
         }
-        failed = bitmap == null
+        bitmap = loaded
+        failed = loaded == null && (work.imageUrl != null || work.photoUri != null)
+        loaded?.let { WorkImageMemoryCache.put(imageKey, it) }
     }
 
-    Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+    Box(
+        modifier = modifier.background(resolvedBackground),
+        contentAlignment = Alignment.Center
+    ) {
+        PlaceholderArt(work.paletteSeed, Modifier.fillMaxSize())
         bitmap?.let {
             Image(
                 bitmap = it,
                 contentDescription = work.title,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                modifier = Modifier.fillMaxSize().graphicsLayer(alpha = imageAlpha),
+                contentScale = contentScale
             )
-        } ?: PlaceholderArt(work.paletteSeed, Modifier.fillMaxSize())
-        if (failed && work.imageUrl != null) {
+        }
+        if (showErrorLabel && failed) {
             Text(
                 "预览暂不可用",
                 color = Color.White.copy(alpha = 0.82f),
@@ -82,20 +131,31 @@ fun WorkImage(work: Work, modifier: Modifier = Modifier) {
 @Composable
 private fun PlaceholderArt(seed: Int, modifier: Modifier) {
     val palettes = listOf(
-        listOf(Color(0xFF071A2D), Color(0xFF1B4965), Color(0xFF8ECAE6)),
-        listOf(Color(0xFF241C1A), Color(0xFF6B4F42), Color(0xFFDDBEA9)),
-        listOf(Color(0xFF101D28), Color(0xFF365B6D), Color(0xFFB8D8D8)),
-        listOf(Color(0xFF251B22), Color(0xFF744253), Color(0xFFE7C6B5))
+        listOf(Color(0xFF07131F), Color(0xFF1B4965), Color(0xFF9FC6D4)),
+        listOf(Color(0xFF211A19), Color(0xFF735347), Color(0xFFE1BFA6)),
+        listOf(Color(0xFF0D1B22), Color(0xFF315865), Color(0xFFB8D8D8)),
+        listOf(Color(0xFF241820), Color(0xFF744253), Color(0xFFE8C7B8)),
+        listOf(Color(0xFF111716), Color(0xFF52645B), Color(0xFFD8D0A8))
     )
-    val palette = palettes[kotlin.math.abs(seed) % palettes.size]
+    val safeSeed = if (seed == Int.MIN_VALUE) 0 else kotlin.math.abs(seed)
+    val palette = palettes[safeSeed % palettes.size]
     Canvas(modifier) {
         drawRect(Brush.linearGradient(palette, Offset.Zero, Offset(size.width, size.height)))
-        repeat(7) { index ->
-            val x = ((seed * 37 + index * 83) % 100).let { if (it < 0) -it else it } / 100f
-            val y = ((seed * 53 + index * 47) % 100).let { if (it < 0) -it else it } / 100f
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(Color.White.copy(alpha = 0.24f), Color.Transparent),
+                center = Offset(size.width * 0.72f, size.height * 0.24f),
+                radius = size.minDimension * 0.45f
+            ),
+            radius = size.minDimension * 0.45f,
+            center = Offset(size.width * 0.72f, size.height * 0.24f)
+        )
+        repeat(6) { index ->
+            val x = ((safeSeed * 37 + index * 83) % 100) / 100f
+            val y = ((safeSeed * 53 + index * 47) % 100) / 100f
             drawCircle(
-                color = Color.White.copy(alpha = 0.08f + index % 3 * 0.04f),
-                radius = size.minDimension * (0.04f + index % 4 * 0.018f),
+                color = Color.White.copy(alpha = 0.035f + index % 3 * 0.025f),
+                radius = size.minDimension * (0.06f + index % 4 * 0.025f),
                 center = Offset(size.width * x, size.height * y)
             )
         }
